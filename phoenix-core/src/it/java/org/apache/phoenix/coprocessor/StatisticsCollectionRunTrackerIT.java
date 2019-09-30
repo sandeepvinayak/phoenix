@@ -33,6 +33,9 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.HBaseAdmin;
+import org.apache.hadoop.hbase.regionserver.HRegion;
+import org.apache.hadoop.hbase.regionserver.HStore;
+import org.apache.hadoop.hbase.regionserver.Store;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.phoenix.end2end.ParallelStatsEnabledIT;
 import org.apache.phoenix.jdbc.PhoenixConnection;
@@ -129,6 +132,30 @@ public class StatisticsCollectionRunTrackerIT extends ParallelStatsEnabledIT {
         // from the tracker. If the method returned true it means the tracker was still tracking
         // the region. Slightly counter-intuitive, yes.
         assertTrue(tracker.removeUpdateStatsCommandRegion(regionInfo,familyMap));
+    }
+
+    /**
+     * This test checks if the delegate patters used in @see UngroupedAggregateRegionObserver#collectStats
+     * @throws Exception
+     */
+    @Test
+    public void testNoScannerLeakedFromCollectStats() throws Exception {
+        String tableName = fullTableName;
+        byte[] tableNameBytes = Bytes.toBytes(tableName);
+        String ddl = "CREATE TABLE " + tableName + " (PK1 VARCHAR PRIMARY KEY, KV1 VARCHAR)";
+        try (Connection conn = DriverManager.getConnection(getUrl())) {
+            conn.createStatement().execute(ddl);
+            conn.createStatement().execute("CREATE LOCAL INDEX " + generateUniqueName() + " ON " + tableName + "(KV1)");
+        }
+        runUpdateStats(tableName);
+        List<HRegion> regions = getUtility().getMiniHBaseCluster().getRegions(tableNameBytes);
+        Assert.assertEquals(1, regions.size());
+        for (HRegion region : regions) {
+            List<Store> hStores = region.getStores();
+            for (Store store : hStores) {
+                Assert.assertEquals(0, ((HStore)store).getStoreRefCount());
+            }
+        }
     }
     
     private void markRegionAsCompacting(HRegionInfo regionInfo) {
